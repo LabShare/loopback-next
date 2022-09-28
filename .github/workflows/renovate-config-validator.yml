@@ -1,0 +1,25 @@
+name: Renovate Config Validator
+
+on:
+  pull_request:
+    paths:
+      - './renovate.json'
+
+permissions: {}
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  main:
+    name: Main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16 # LTS
+      - name: Validate Renovate config
+        run: npx -p renovate --yes renovate-config-validator

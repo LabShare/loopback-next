@@ -1,0 +1,151 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  schedule:
+    - cron: '0 2 * * 1' # At 02:00 on Monday
+
+permissions: {}
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  test:
+    name: Test
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        node-version: [14, 16, 17, 18]
+        include:
+          - os: macos-latest
+            node-version: 16 # LTS
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+      - uses: Yuri6037/Action-FakeTTY@v1.1
+      - name: Bootstrap
+        run: |
+          npm ci --ignore-scripts
+          npx lerna bootstrap
+      - name: Build
+        run: node packages/build/bin/compile-package -b
+      - name: Run package tests
+        run: |
+          node packages/build/bin/run-nyc node packages/build/bin/run-mocha --lang en_US.UTF-8 --reporter spec "packages/*/dist/__tests__/**/*.js" "packages/build/test/*/*.js"
+        # FixMe(frbuceta): The tests for cli are failing, when they are fixed you have to revert this change
+        # faketty node packages/build/bin/run-nyc node packages/build/bin/run-mocha --lang en_US.UTF-8 --reporter spec "packages/cli/test/**/*.js"
+      - name: Run extension tests
+        run: node packages/build/bin/run-nyc node packages/build/bin/run-mocha --lang en_US.UTF-8 --reporter spec "extensions/*/dist/__tests__/**/*.js"
+      - name: Run example tests
+        run: node packages/build/bin/run-nyc node packages/build/bin/run-mocha --lang en_US.UTF-8 --reporter spec "examples/*/dist/__tests__/**/*.js"
+      - name: Generate coverage
+        run: node packages/build/bin/run-nyc report --reporter=lcov
+      - name: Publish coverage to Coveralls
+        uses: coverallsapp/github-action@master
+        with:
+          flag-name: run-${{ matrix.os }}-node@${{ matrix.node-version }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          parallel: true
+
+  posttest:
+    name: Post-Test
+    needs: test
+    runs-on: ubuntu-latest
+    if: ${{ success() }}
+    steps:
+    - name: Set finish on Coveralls
+      uses: coverallsapp/github-action@master
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        parallel-finished: true
+
+  test-benchmark:
+    name: Test Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16 # LTS
+      - name: Bootstrap
+        run: |
+          npm ci --ignore-scripts
+          npx lerna bootstrap --scope "@loopback/benchmark" --include-dependencies
+      - name: Build
+        run: npx lerna run build --scope "@loopback/benchmark"
+      - name: Run benchmark tests
+        run: npx lerna run test --scope "@loopback/benchmark" -- --ignore-scripts -- --reporter spec
+
+  code-lint:
+    name: Code Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16 # LTS
+      - name: Bootstrap
+        run: |
+          npm ci --ignore-scripts
+          npx lerna bootstrap
+      - name: Build
+        run: node packages/build/bin/compile-package -b
+      - name: Verify code linting
+        run: |
+          node packages/build/bin/run-eslint .
+          node packages/build/bin/run-prettier --check "**/*.ts" "**/*.js" "**/*.md" "!docs/**/*.md"
+      - name: Verify package-lock files
+        run: node packages/monorepo/lib/check-package-locks
+      - name: Verify package metadata
+        run: node bin/check-package-metadata.js
+
+  commit-lint:
+    name: Commit Lint
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16 # LTS
+      - name: Bootstrap
+        run: |
+          npm ci --ignore-scripts
+          npx lerna bootstrap --scope "@loopback/monorepo" --include-dependencies
+      - name: Verify commit linting
+        run: npx commitlint --from origin/master --to HEAD --verbose
+
+  verify-docs:
+    name: Verify Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16 # LTS
+      - name: Bootstrap
+        run: |
+          npm ci --ignore-scripts
+          npx lerna bootstrap
+      - name: Build
+        run: node packages/build/bin/compile-package -b
+      - name: Verify linting
+        run: node packages/build/bin/run-prettier --check "docs/**/*.md"
+      - name: Verify changes
+        run: ./bin/verify-doc-changes.sh
